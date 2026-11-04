@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: ['main', 'develop', 'feature/**']
+  pull_request:
+    branches: ['main']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - name: Boot smoke test
+        run: |
+          node dist/main.js &
+          sleep 5
+          curl -fsS http://127.0.0.1:3000/health
+          curl -fsS http://127.0.0.1:3000/api/products
+          curl -fsS http://127.0.0.1:3000/api/users

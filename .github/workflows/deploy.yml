@@ -1,0 +1,95 @@
+name: Build & Deploy
+
+on:
+  push:
+    tags: ['v*']          # git tag v1.0.0 && git push origin v1.0.0
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release name to deploy (e.g. v2.0.0). Defaults to the selected tag/branch name.'
+        required: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  APP_NAME: nest-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve version
+        id: meta
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          [ -z "$VERSION" ] && VERSION="${GITHUB_REF_NAME}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying release: $VERSION"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Package release (dist + production node_modules)
+        run: |
+          npm prune --omit=dev
+          cat > RELEASE_INFO.json <<EOF
+          { "version": "${{ steps.meta.outputs.version }}", "commit": "${GITHUB_SHA::7}", "builtAt": "$(date -u +%FT%TZ)" }
+          EOF
+          tar -czf ${APP_NAME}-${{ steps.meta.outputs.version }}.tar.gz dist node_modules package.json RELEASE_INFO.json
+          ls -lh *.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.meta.outputs.version }}
+          path: ${{ env.APP_NAME }}-${{ steps.meta.outputs.version }}.tar.gz
+          retention-days: 30
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload release and scripts
+        run: |
+          TARGET="${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}"
+          ssh -i ~/.ssh/deploy_key "$TARGET" "mkdir -p ~/deploy-scripts"
+          scp -i ~/.ssh/deploy_key deploy/scripts/*.sh "$TARGET:~/deploy-scripts/"
+          scp -i ~/.ssh/deploy_key ${APP_NAME}-${{ needs.build.outputs.version }}.tar.gz "$TARGET:/tmp/"
+
+      - name: Deploy (new release dir + symlink switch + health check)
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "chmod +x ~/deploy-scripts/*.sh && \
+             ~/deploy-scripts/deploy.sh ${{ needs.build.outputs.version }} /tmp/${APP_NAME}-${{ needs.build.outputs.version }}.tar.gz && \
+             ~/deploy-scripts/status.sh"
+
+      - name: Smoke test from the internet
+        run: |
+          sleep 3
+          curl -fsS "http://${{ secrets.EC2_HOST }}:3000/version"

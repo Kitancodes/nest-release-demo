@@ -1,0 +1,28 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: 'Release to roll back to (e.g. v1.0.0). Leave empty for the previous release.'
+        required: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Switch symlink back
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "~/deploy-scripts/rollback.sh ${{ github.event.inputs.target_version }} && ~/deploy-scripts/status.sh"
+
+      - name: Verify
+        run: curl -fsS "http://${{ secrets.EC2_HOST }}:3000/version"
