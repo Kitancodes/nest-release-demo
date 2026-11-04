@@ -1,6 +1,6 @@
 {
   "name": "nest-release-demo",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Nest.js backend deployed to Ubuntu (no Docker) with release directories, symlinks and rollback",
   "private": true,
   "license": "UNLICENSED",
