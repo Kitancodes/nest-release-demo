@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 variable "region" {
-  default = "us-east-1"
+  default = "eu-west-2"
 }
 
 variable "instance_type" {
@@ -36,6 +36,45 @@ data "aws_ami" "ubuntu" {
   }
 }
 
+# ---------- Network (the account has no default VPC) ----------
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.10.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags                 = { Name = "nest-app-vpc" }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "nest-app-igw" }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.10.1.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+  tags                    = { Name = "nest-app-public-subnet" }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+  tags = { Name = "nest-app-public-rt" }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
 resource "aws_key_pair" "deployer" {
   key_name   = "nest-key"
   public_key = file(var.public_key_path)
@@ -44,6 +83,7 @@ resource "aws_key_pair" "deployer" {
 resource "aws_security_group" "app" {
   name        = "nest-app-sg"
   description = "SSH + Nest.js API"
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     description = "SSH"
@@ -72,6 +112,7 @@ resource "aws_instance" "app" {
   instance_type          = var.instance_type
   key_name               = aws_key_pair.deployer.key_name
   vpc_security_group_ids = [aws_security_group.app.id]
+  subnet_id              = aws_subnet.public.id
 
   # Bootstrap: Node.js, swap, /opt/nest-app layout, systemd unit
   user_data = file("${path.module}/../deploy/scripts/server-setup.sh")
