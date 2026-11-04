@@ -6,3 +6,5 @@ dist/
 terraform/.terraform/
 terraform/*.tfstate*
 terraform/terraform.tfvars
+terraform/nest-key
+terraform/nest-key.pub
